@@ -1,0 +1,142 @@
+# Working code 31.03.23. This is the SDE version in which we also compute
+# and plot the average trajectory of particles 
+
+using DifferentialEquations, Plots, UnPack, Distributions, StaticArrays, CellListMap # libraries
+using CellListMap.PeriodicSystems
+# I should use this in order to put all the coordinates in the domain I want 
+import CellListMap.wrap_relative_to
+
+
+
+# Function calculating the potentials 
+function update_potential!(i,j,d2,potential,u,R)
+    if d2 < R*R
+        dK = sin(u[j,3] - u[i,3])
+        df = u[j,4]-u[i,4]
+
+        potential[i] += @SVector[dK, df]
+        potential[j] -= @SVector[dK, df]
+    end
+
+    return potential
+end
+
+
+
+function Vicsek_model!(du,u,p,t)
+    @unpack R, v₀,L,k_1, k_2, τ, N, system = p
+    # This should trigger the update of the potential
+    for i in 1:N
+        system.xpositions[i] = @SVector[u[i,1], u[i,2]]
+    end
+    PeriodicSystems.map_pairwise!((x,y,i,j,d2,potential) -> update_potential!(i,j,d2,potential,u,R), system)
+
+    for i=1:N
+        # dX_i/dt = V_i
+        du[i,1] = v₀ * cos(u[i,3])
+        du[i,2] = v₀ * sin(u[i,3])
+
+        # dθ_i/dt
+        du[i,3] = u[i,4] + (k_1*1/N) * system.potential[i][1]
+
+        # dω_i/dt
+        du[i,4] = - u[i,4]/τ + (k_2*1/N) * system.potential[i][2]
+    end
+    nothing
+end
+
+
+function σ_Vicsek!(du,u,p,t)
+    @unpack noise1, noise2, N = p
+    for i=1:N
+        du[i, 1] = 0.0
+        du[i, 2] = 0.0  # dX_i/dt = V_i (second component)
+        du[i, 3] = noise1
+        du[i, 4] = noise2
+    end
+end
+
+
+
+#Parameters 
+N=100   # Total number of individuals
+k_1=30  # factor multiplying the interaction potential
+k_2=40  # factor multiplying the interaction potential (in velocity)
+τ=10   # factor dividing the angular velocity in the ODE for \theta
+end_time = 30 # Final time for the simulation
+noise_1 = 0.5
+noise_2 = 0.5
+R = 0.8   #Interaction radius
+v₀ = 1    #constant velocity of particles 
+L = 6    #dimension of the domain
+
+
+# Initial data:
+pos = rand(2,N) .* L
+θ = rand(N)*2π./L
+ω = -[1 for i in 1:N]+ 8*rand(N)
+u_init = [pos' θ  ω]
+# This is the vector that the periodic system needs for the CellListMap algorithm
+xpos = [ SVector{2,Float64}(pos[:,i]) for i in 1:N]
+# Apparently I need to initialize a param, otherwise it doesn't see it 
+param = (R, v₀ = 1, L, N, k_1, k_2, τ)
+
+
+# Periodic system 
+system = PeriodicSystem(
+           xpositions = xpos,
+           unitcell = [param.L,param.L] , 
+           cutoff = 2*param.R, 
+           output = similar(xpos),
+           output_name = :potential
+       )
+Threads.nthreads()
+system.parallel = false
+# Put the systems inside the param in order to trigger the update 
+param = (R, v₀ = 1, L, N, k_1, k_2, τ, system)
+
+
+# Solve the ODE with ODE solver 
+#probVK = ODEProblem(Vicsek_model!,u_init,(0.0,end_time),param)
+#time_execution = @elapsed solVK = solve(probVK, Tsit5())
+#@profview solve(probVK, Tsit5())
+sde_param = (; param..., noise1 = rand(Uniform(-noise_1,noise_1)) , noise2=rand(Uniform(-noise_2,noise_2)))
+prob_sde = SDEProblem(Vicsek_model!,σ_Vicsek!,u_init,(0.0,end_time), sde_param)
+#focus_inds = [20,30,40]
+time_execution = @elapsed sol_sde= solve(prob_sde, SOSRI())
+
+using BenchmarkTools
+#@benchmark solve(probVK, Tsit5())
+#@btime
+
+
+
+# Plot the average 
+L=sde_param[3]
+anim = @animate for time ∈ 0.0:0.1:end_time
+    s = sol_sde(time)
+    x=[]
+    y=[]
+    u=[]
+    v=[]
+    for i=1:N
+        if s[i,1]<0; s[i,1]=s[i,1]+ L; end
+        if s[i,2]<0; s[i,2]=s[i,2]+L; end
+        append!(x,s[i,1] % L)
+        append!(y,s[i,2] % L)
+        append!(u,cos(s[i,3]))
+        append!(v,sin(s[i,3]))
+    end
+    t_inds = sol_sde.t .< time
+    average_x = mean(sol_sde[:,1, t_inds], dims=1)
+    average_y = mean(sol_sde[:,2, t_inds], dims=1)
+    fig1 = plot(average_x', average_y',xlims=[0,L],ylims=[0,L], title = "csek N=$N R=$(param[1]) τ=$(param[7]) k_1=$(param[5]) k_2=$(param[6]) t=$time")
+    fig2 = scatter(x,y,xlims=[0,L],ylims=[0,L])
+    #plot!( sol_diff_V[focus_inds, 1, t_inds]', sol_diff_V[focus_inds, 2, t_inds]', color = "red", linewidth=2) # I fixed the axis, otherwise, erase xlims and ylims
+    quiver!(x,y,quiver=(u,v))
+    plot(fig1,fig2, layout = 2)
+    plot!(size=(800,400))
+end
+    gif(anim, "animationVicsek N=$N R=$(param[1]) τ=$(param[7]) k_1=$(param[5]) k_2=$(param[6]) + Noise.gif", fps = 10)
+
+
