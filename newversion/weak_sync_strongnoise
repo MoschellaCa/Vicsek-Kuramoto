@@ -40,7 +40,7 @@ function Vicsek_model!(du,u,p,t)
         du[i,3] = u[i,4] + (k_1*1/N) * system.potential[i][1]
 
         # dω_i/dt
-        du[i,4] = - u[i,4]/τ + (k_2*1/N) * system.potential[i][2]
+        du[i,4] = - u[i,4]/τ + (k_2*1/N) * system.potential[i][2] + sign(u[i,4])*exp(-abs(u[i,4])/0.05)*0.5
     end
     nothing
 end
@@ -59,27 +59,27 @@ end
 
 
 #Parameters 
-N=5000  # Total number of individuals
-k_1=30  # factor multiplying the interaction potential
-k_2=40  # factor multiplying the interaction potential (in velocity)
-τ=50   # factor dividing the angular velocity in the ODE for \theta
+N=10000   # Total number of individuals
+k_1=0.4  # factor multiplying the interaction potential
+k_2=2  # factor multiplying the interaction potential (in velocity)
+τ=1   # factor dividing the angular velocity in the ODE for \theta
 end_time = 100 # Final time for the simulation
-noise_1 = 0.5
-noise_2 = 0.5
-R = 1.5   #Interaction radius
-v₀ = 1    #constant velocity of particles 
-L = 100    #dimension of the domain
+noise1 = 1
+noise2 = 0.2
+R = 3   #Interaction radius
+v₀ = 30    #constant velocity of particles 
+L = 192    #dimension of the domain
 
 
 # Initial data:
 pos = rand(2,N) .* L
 θ = rand(N)*2π./L
-ω = 4*rand(N)
+ω = 10*rand(N)
 u_init = [pos' θ  ω]
 # This is the vector that the periodic system needs for the CellListMap algorithm
 xpos = [ SVector{2,Float64}(pos[:,i]) for i in 1:N]
 # Apparently I need to initialize a param, otherwise it doesn't see it 
-param = (R, v₀ = 1, L, N, k_1, k_2, τ)
+param = (R, v₀ = 30, L, N, k_1, k_2, τ)
 
 
 # Periodic system 
@@ -93,16 +93,15 @@ system = PeriodicSystem(
 Threads.nthreads()
 system.parallel = false
 # Put the systems inside the param in order to trigger the update 
-param = (R, v₀ = 1, L, N, k_1, k_2, τ, system)
+param = (R, v₀ = 30, L, N, k_1, k_2, τ, system, noise1, noise2)
 
 
 # Solve the ODE with ODE solver 
 #probVK = ODEProblem(Vicsek_model!,u_init,(0.0,end_time),param)
 #time_execution = @elapsed solVK = solve(probVK, Tsit5())
 #@profview solve(probVK, Tsit5())
-sde_param = (; param..., noise1 = rand(Uniform(-noise_1,noise_1)) , noise2=rand(Uniform(-noise_2,noise_2)))
-prob_sde = SDEProblem(Vicsek_model!,σ_Vicsek!,u_init,(0.0,end_time), sde_param)
-focus_inds = [20]
+prob_sde = SDEProblem(Vicsek_model!,σ_Vicsek!,u_init,(0.0,end_time), param)
+#focus_inds = [20,30,40]
 time_execution = @elapsed sol_sde= solve(prob_sde, SOSRI())
 
 using BenchmarkTools
@@ -112,30 +111,31 @@ using BenchmarkTools
 
 
 # Plot the average 
-#L=sde_param[3]
-anim = @animate for time ∈ 0.0:0.2:end_time
+L=param[3]
+anim = @animate for time ∈ 0.0:0.4:end_time
     s = sol_sde(time)
     x=[]
     y=[]
     u=[]
     v=[]
     for i=1:N
-        append!(x,mod(s[i,1], param.L))
-        append!(y,mod(s[i,2], param.L))
+        if s[i,1]<0; s[i,1]=s[i,1]+ L; end
+        if s[i,2]<0; s[i,2]=s[i,2]+L; end
+        append!(x,s[i,1] % L)
+        append!(y,s[i,2] % L)
         append!(u,cos(s[i,3]))
         append!(v,sin(s[i,3]))
     end
     t_inds = sol_sde.t .< time
     average_x = mean(sol_sde[:,1, t_inds], dims=1)
     average_y = mean(sol_sde[:,2, t_inds], dims=1)
-    fig1 = plot(average_x', average_y', title = " N=$N R=$(param[1]) L=$(param[3]) τ=$(param[7]) k_1=$(param[5]) k_2=$(param[6]) t=$time")
-    fig2 = scatter(x,y,xlims=[0,L],ylims=[0,L])
-    plot!( sol_sde[focus_inds, 1, t_inds]', sol_sde[focus_inds, 2, t_inds]', color = "red", linewidth=2) # I fixed the axis, otherwise, erase xlims and ylims
-    quiver!(x,y,quiver=(u,v))
-    plot(fig1,fig2, layout = 2)
-    plot!(size=(800,400))
+    fig1 = plot(average_x', average_y', title = "N=$N R=$(param[1]) τ=$(param[7]) k_1=$(param[5]) k_2=$(param[6]) t=$time")
+    #fig2 = scatter(x,y,xlims=[0,L],ylims=[0,L])
+    #plot!( sol_diff_V[focus_inds, 1, t_inds]', sol_diff_V[focus_inds, 2, t_inds]', color = "red", linewidth=2) # I fixed the axis, otherwise, erase xlims and ylims
+    #quiver!(x,y,quiver=(u,v))
+    #plot(fig1,fig2, layout = 2)
+    #plot!(size=(800,400))
 end
-    gif(anim, "animationVicsek N=$N R=$(param[1]) L=$(param[3]) v=$(param[2])  k_1=$(param[5]) k_2=$(param[6]) R=$(param[1]) τ=$(param[7]).gif", fps = 10)
-
+    gif(anim, "animationVicsek N=$N R=$(param[1]) τ=$(param[7]) k_1=$(param[5]) k_2=$(param[6]) + Noise.gif", fps = 10)
 
 
