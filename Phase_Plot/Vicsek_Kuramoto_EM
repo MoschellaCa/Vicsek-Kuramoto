@@ -1,0 +1,193 @@
+# Working code 31.03.23. This is the SDE version in which we also compute
+# and plot the average trajectory of particles 
+
+
+# Libraries
+using DifferentialEquations, Plots, UnPack, Distributions, StaticArrays, CellListMap# libraries
+using CellListMap.PeriodicSystems 
+import CellListMap.wrap_relative_to
+using Logging: global_logger
+using TerminalLoggers: TerminalLogger
+global_logger(TerminalLogger())
+
+
+# Function calculating and updating the potentials
+function update_potential!(i,j,d2,potential,u,R)
+    if sqrt(d2) < R
+        dK = sin(u[j,3] - u[i,3])
+        df = u[j,4]-u[i,4]
+
+        potential[i] += @SVector[dK, df]
+        potential[j] -= @SVector[dK, df]
+    end
+    return potential
+end
+
+
+
+# Function to compute how many neighbors each particles has
+# IMPORTANT HINT: I check that actually the routine neighbourlist look at the distance and not at the squared distance
+function update_neighbourlist!(position,neighbourlist_update, N,R,L)
+    n =neighborlist(position,R; unitcell=[L,L])
+    n1 = [ SVector{1,Int64}(n[i][1]) for i in 1:size(n,1)]
+    n2 = [ SVector{1,Int64}(n[i][2]) for i in 1:size(n,1)]
+    for j in 1:N
+        count1 = count(i->(i == [j]), n1)
+        count2 = count(i->(i == [j]), n2)
+        neighbourlist_update[j]=  @SVector[count1 + count2]
+    end 
+    return neighbourlist_update
+end
+
+
+
+
+function Vicsek_Kuramoto(u0, p)
+    @unpack R, v₀,L,k_1, k_2, τ, N, system, dt, time_steps, ω₀, time_steps = p
+    # I prealocate the space for the data I want to save for plotting 
+    # the solution will contain the initial datum and then time_steps time iteration solution
+    solution = zeros(N * (time_steps+1), 3)
+    solution[1:N, :] .= u0[:, 1:3]
+    u = copy(u0)
+
+    for time in 1:1:time_steps
+        for i in 1:N
+            system.xpositions[i] = @SVector[u[i,1], u[i,2]]
+        end
+        PeriodicSystems.map_pairwise!((x,y,i,j,d2,potential) -> update_potential!(i,j,d2,potential,u,R), system; show_progress = true)
+        
+        for i in 1:N
+            # Euler Maruyama method update
+            u[i,1] = u[i,1] + v₀ * cos(u[i,3])*dt
+
+            u[i,2] = u[i,2] + v₀ * sin(u[i,3])*dt
+
+            u[i,3] = u[i,3] + u[i,4] * dt + (k_1*1/N) * ((L^2)/(pi*(R^2))) * system.potential[i][1] * dt + noise1 * randn(1)[1] * √dt
+
+            # dω_i/dt
+            u[i,4] = u[i,4] - u[i,4]/τ * dt  + (k_2*1/N) * ((L^2)/(pi*(R^2))) * system.potential[i][2] * dt + sign(u[i,4])*exp(-abs(u[i,4])/ω₀) * rand() * dt + noise2 * randn(1)[1]  * √dt
+           
+            # Save positions and angles 
+            solution[(time * N + i), 1 ] = u[i,1]
+            solution[(time * N + i), 2 ] = u[i,2]
+            solution[(time * N + i), 3 ] = u[i,3]
+            
+        end
+        
+    end
+
+    return solution
+
+end
+
+
+
+#Parameters 
+N=20_000 # Total number of individuals
+k_1=0.4 # factor multiplying the interaction potential in the direction variable
+k_2=2 # factor multiplying the interaction potential in the angular velocity variable
+τ=1 # costant dividing the friction term 
+end_time = 20 # Final time for the simulation
+noise1 = 1
+noise2 = 1
+R = 1   #Interaction radius
+v₀ = 1    #constant velocity of particles 
+L = 64  #dimension of the periodic domain
+
+
+
+# Initial data:
+pos = rand(2,N) .* L
+#the angle is in radiants
+θ = rand(N)*2π
+ω = 5*rand(N)
+ω[Int64(N/4):end] = - ω[Int64(N/4):end]
+u_init = [pos' θ  ω]
+# This is the vector that the periodic system needs for the CellListMap algorithm
+xpos = [ SVector{2,Float64}(pos[:,i]) for i in 1:N]
+neighbours_init = zeros(1,N)
+neighbours_upd = [ SVector{1,Int64}(neighbours_init[i]) for i in 1:N]
+# Apparently I need to initialize a param, otherwise it doesn't see it 
+dt = 0.1
+ω₀ = 0.05
+time_steps = Int64(end_time / dt)
+param = (R=R, v₀ , L, N, k_1, k_2, τ, dt, end_time, ω₀, time_steps)
+
+
+
+
+# Periodic system 
+# The cutoff should be the distance and not the distance squared
+system = PeriodicSystem(
+        xpositions = xpos,
+        unitcell = [param.L,param.L] , 
+        cutoff = 2*param.R, 
+        output = similar(xpos),
+        output_name = :potential
+    )
+Threads.nthreads()
+system.parallel = true
+# Put the systems inside the param in order to trigger the update 
+param = (R=R, v₀, L, N, k_1, k_2, τ, system, noise1, noise2, dt, end_time, ω₀, time_steps)
+
+# Solving the system
+position_angles = Vicsek_Kuramoto(u_init, param)
+
+
+# Plotting average velocity components 
+average_vel_x= []
+average_vel_y= []
+# Put the initial average value 
+for t ∈ 0:1:time_steps
+    append!(average_vel_x, mean(v₀*cos.(position_angles[t * N + 1: (t + 1)*N ,3]), dims=1))
+    append!(average_vel_y, mean(v₀*sin.(position_angles[t * N + 1: (t + 1)*N ,3]), dims=1))
+end 
+time_axis = [ i for i in 0:dt:end_time]
+fig2= plot(time_axis,average_vel_x, label = "Vx")
+plot!(time_axis,average_vel_y, title="Averaged velocity", label="Vy", linewidth=1)
+plot!(size=(1000,400))
+savefig(fig2,"Average behavior no friction no noise N=$N R=$(param[1]) L=$(param[3]) v=$(param[2])  k_1=$(param[5]) k_2=$(param[6])  τ=$(param[7]) noise1=$(param[9]) noise2=$(param[10]) .png") 
+
+
+
+# Plot  
+anim = @animate for time ∈ (time_steps-100):1:time_steps
+    x=[]
+    y=[]
+    z=[]
+    for i=1:N
+        append!(x,mod(position_angles[(N * time) + i,1], param.L))
+        append!(y,mod(position_angles[(N * time) + i,2], param.L))
+        append!(z, mod(position_angles[(N * time) + i,3], 2π))
+
+    end
+    gr(size=(800,800),markerstrokewidth=0, markersize = 4, legend = false, colorbar = true)
+    fig4 = scatter(x,y,marker_z=z, color=:rainbow, xlims=[0,L],ylims=[0,L])
+    plot(fig4)
+    end
+gif(anim, "animationVicsek no friction no noise N=$N R=$(param[1]) L=$(param[3]) v=$(param[2])  k_1=$(param[5]) k_2=$(param[6]) R=$(param[1]) τ=$(param[7]) noise1=$(param[9]) noise2=$(param[10]).gif", fps = 10)
+
+
+
+
+
+#Plot of the fake particle 
+x_0 = 10
+y_0 = 10
+average_pos_x = []
+average_pos_y = []
+append!(average_pos_x,x_0)
+append!(average_pos_y,y_0)
+
+for time ∈ 2:1:time_steps
+    append!(average_pos_x, average_pos_x[time-1] +dt*average_vel_x[time-1])
+    append!(average_pos_y, average_pos_y[time-1] +dt*average_vel_y[time-1])
+end 
+n_color = size(average_pos_x,1)
+color = palette(:viridis, n_color)
+#Plot of the fake particle
+t = LinRange(0, end_time, n_color) 
+fig5= plot(average_pos_x,average_pos_y,line_z = t ,color=:Greens, colorbar = true, linewidth = 2, colorbar_title = "Time")
+plot!(fig5, size=(600,600))
+savefig(fig5,"Average trajectory no friction no noise N=$N R=$(param[1]) L=$(param[3]) v=$(param[2])  k_1=$(param[5]) k_2=$(param[6])  τ=$(param[7]) noise1=$(param[9]) noise2=$(param[10]) .png") 
+
