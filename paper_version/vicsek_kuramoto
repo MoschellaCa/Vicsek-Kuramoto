@@ -1,0 +1,233 @@
+#Comment 1.06.2025 This is the right version of the code to use.
+#I will create a parallel version to visualize the angular velocity instead of the direction 
+
+
+using LinearAlgebra, Plots, ProgressMeter, Profile, ProfileView, Optim, CSV, DataFrames, Dates
+using DifferentialEquations, Plots, UnPack, Distributions, StaticArrays, CellListMap
+import CellListMap.wrap_relative_to
+using Logging: global_logger
+using TerminalLoggers: TerminalLogger
+global_logger(TerminalLogger())
+###############################################################################################
+
+# FUNCTIONS
+
+# Initializes the CSV file with headers if it doesn't exist.
+# If the file exists, reads it to find the last simulation ID.
+# Returns the next simulation ID to be used.
+function initialize_csv_log(csv_path::String)::Int
+    if !isfile(csv_path)
+        # Create an empty DataFrame with the specified headers
+        empty_df = DataFrame(simulation_id =[] , N=[] , k_1=[] , k_2=[] , noise1=[] , noise2 = [], v₀=[], L=[], R=[], date=[])
+        # Write the empty DataFrame to CSV (this creates the file with headers)
+        CSV.write(csv_path, empty_df)
+        return 1  # Start simulation IDs at 1
+    else
+        println("CSV file exists at ", csv_path, ". Reading last simulation ID...")
+        # Read the existing CSV
+        try
+            existing_df = CSV.read(csv_path, DataFrame)
+            if nrow(existing_df) == 0
+                println("CSV file is empty. Starting simulation IDs at 1.")
+                return 1
+            else
+                # Assuming simulation_id is sorted, find the maximum ID
+                last_id = maximum(existing_df.simulation_id)
+                println("Last simulation ID found: ", last_id)
+                return last_id + 1
+            end
+        catch e
+            println("Error reading CSV file: ", e)
+            println("Starting simulation IDs at 1.")
+            return 1
+        end
+    end
+end
+
+
+
+
+# Function to append a single simulation result to the CSV
+function append_simulation_result(csv_path::String, simulation_id::Int, N, k_1, k_2, noise1, noise2, v₀, L, R, dt, date)
+    # Create a DataFrame for the new row
+    new_row = DataFrame(
+        simulation_id =[simulation_id] ,
+        N=[N] ,
+        k_1=[k_1] ,
+        k_2=[k_2] ,
+        noise1=[noise1] ,
+        noise2 = [noise2], 
+        v₀=[v₀], 
+        L=[L], 
+        R=[R], 
+        dt=[dt],
+        date=[date]
+    )
+    
+    # Append the new row to the CSV without writing headers
+    CSV.write(csv_path, new_row, append=true)
+end
+
+
+# Function calculating and updating the potentials
+function update_potential!(i,j,d2,potential,u,R)
+    if sqrt(d2) < R
+        dK1_i = cos(u[j,3])
+        dK2_i = sin(u[j,3])
+        df_i = u[j,4] 
+        dK1_j = cos(u[i,3])
+        dK2_j = sin(u[i,3])
+        df_j = u[i,4] 
+
+        potential[i] += @SVector[dK1_i,dK2_i,df_i,1]
+        potential[j] += @SVector[dK1_j,dK2_j,df_j,1]
+    end
+    return potential
+end
+
+
+
+# Function to compute how many neighbors each particles has
+# IMPORTANT HINT: I check that actually the routine neighbourlist look at the distance and not at the squared distance
+function update_neighbourlist!(position,neighbourlist_update, N,R,L)
+    n =neighborlist(position,R; unitcell=[L,L])
+    n1 = [ SVector{1,Int64}(n[i][1]) for i in 1:size(n,1)]
+    n2 = [ SVector{1,Int64}(n[i][2]) for i in 1:size(n,1)]
+    for j in 1:N
+        count1 = count(i->(i == [j]), n1)
+        count2 = count(i->(i == [j]), n2)
+        neighbourlist_update[j]=  @SVector[count1 + count2]
+    end 
+    return neighbourlist_update
+end
+
+
+
+function Vicsek_model!(du,u,p,t)
+    @unpack R, v₀,L,k_1, k_2, N, system = p
+    # This should trigger the update of the potential
+    for i in 1:N
+        system.xpositions[i] = @SVector[u[i,1], u[i,2]]
+    end
+    
+    map_pairwise!((x,y,i,j,d2,potential) -> update_potential!(i,j,d2,potential,u,R), system)
+    
+
+    for i=1:N
+        # dX_i/dt = V_i
+        du[i,1] = v₀ * cos(u[i,3])
+        du[i,2] = v₀ * sin(u[i,3])
+
+        J  = system.potential[i]            
+        θ̄ = atan(J[2], J[1])                       
+        
+        du[i,3] =  u[i,4] + k_1 * sin(θ̄ - u[i,3]) 
+
+        # dω_i/dt 
+        if J[4] != 0
+            du[i,4] =  k_2 * (J[3]/J[4]- u[i,4])
+        else 
+            du[i,4] =  k_2 * (J[3] - u[i,4])
+        end
+    end
+
+end
+
+
+function σ_Vicsek!(du,u,p,t)
+    @unpack noise1, noise2, N = p
+    for i=1:N
+        du[i, 1] = 0.0
+        du[i, 2] = 0.0  # dX_i/dt = V_i (second component)
+        du[i, 3] = noise1
+        du[i, 4] = noise2
+    end
+end
+
+
+#Parameters 
+N=15_000 # Total number of individuals
+k_1=1 # factor multiplying the interaction potential in the direction variable
+k_2=1 # factor multiplying the interaction potential in the angular velocity variable
+end_time = 200 # Final time for the simulation
+noise1 = 0.5
+noise2 = 0.5
+dt = 0.1
+R = 2 #Interaction radius
+v₀ = 1   #constant velocity of particles 
+L = 64  #dimension of the periodic domain
+output_csv = "data_simulation.csv"
+save_path = "/Users/moschellaca/Desktop/Vicsek Kuramoto Micro/Simulations_paper/"
+date = now()
+
+# Initial data:
+pos = rand(2,N) .* L
+output = rand(4,N)
+#the angle is in radiants
+θ = rand(N)*2π
+ω = 5 * rand(N)
+ω[Int64(N/4):end] = - ω[Int64(N/4):end]
+u_init = [pos' θ  ω]
+# This is the vector that the periodic system needs for the CellListMap algorithm
+xpos = [ SVector{2,Float64}(pos[:,i]) for i in 1:N]
+output = [ SVector{4,Float64}(output[:,i]) for i in 1:N]
+neighbours_init = zeros(1,N)
+neighbours_upd = [ SVector{1,Int64}(neighbours_init[i]) for i in 1:N]
+# Apparently I need to initialize a param, otherwise it doesn't see it 
+
+
+for k_1 ∈ 1:10:81
+    for k_2 ∈ 1:10:81
+        param = (R=R, v₀ , L, N, k_1, k_2)
+
+        # Periodic system 
+        # The cutoff should be the distance and not the distance squared
+        system = ParticleSystem(
+                xpositions = xpos,
+                unitcell = [param.L,param.L] , 
+                cutoff = 2*param.R, 
+                output = similar(output),
+                output_name = :potential
+            )
+        Threads.nthreads()
+
+        # Put the systems inside the param in order to trigger the update 
+        param = (R=R, v₀, L, N, k_1, k_2, system, noise1, noise2, J = Float64[])
+
+
+        # Solve the ODE with ODE solver 
+        #probVK = ODEProblem(Vicsek_model!,u_init,(0.0,end_time),param)
+        #time_execution = @elapsed solVK = solve(probVK, Tsit5())
+        #@profview solve(probVK, Tsit5())
+        prob_sde = SDEProblem(Vicsek_model!,σ_Vicsek!,u_init,(0.0,end_time), param)
+
+        #Solution of the porblem with SDE solver 
+        time_execution = @elapsed sol_sde= solve(prob_sde,LambaEM(), dt=0.1,progress=true,progress_steps=1)
+
+        next_sim_id = initialize_csv_log(output_csv)
+        # Append the results to the CSV file
+        append_simulation_result(output_csv, next_sim_id, N, k_1, k_2, noise1, noise2, v₀, L, R, dt, date)
+        
+
+
+        anim = @animate for time ∈ (end_time-10.0):0.1:end_time
+            s = sol_sde(time)
+            x=[]
+            y=[]
+            z=[]
+            for i=1:N
+                append!(x,mod(s[i,1], param.L))
+                append!(y,mod(s[i,2], param.L))
+                append!(z, mod(s[i,3], 2π))
+            end
+            gr(size=(800,800),markerstrokewidth=0, markersize = 4, legend = false, colorbar = true, colorbar_scale = asinh, clims = (0, 2π))
+            fig4 = scatter(x,y,marker_z=z, color=:rainbow, xlims=[0,L],ylims=[0,L])
+            plot(fig4)
+            title!("t=$time")
+            end
+        gif(anim, "/Users/moschellaca/Desktop/Vicsek Kuramoto Micro/Simulations_paper/animations_VK/animationVicsek_celllist_$next_sim_id.gif", fps = 10)
+
+    end
+end
+
+
