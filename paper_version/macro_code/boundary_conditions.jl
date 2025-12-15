@@ -3,6 +3,7 @@
 
 Apply the boundary conditions `bcond_x` on the x-axis of the matrix `density`.
 Currently, only the boundary conditions `"periodic"`, `"Neumann"` and `"reflecting"` are implemented.
+End comment
 
 """
 function boundary_conditions_x!(density,bcond_x)
