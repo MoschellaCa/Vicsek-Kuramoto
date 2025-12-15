@@ -14,6 +14,10 @@ export plot_rhoUV, update_plot!, save_data!, radial_density
 export run!
 export scheme_iter!
 export make_new_dir, coefficients_Vicsek, nice_float2string
+export center_of_mass
+
+
+
 
 
 
