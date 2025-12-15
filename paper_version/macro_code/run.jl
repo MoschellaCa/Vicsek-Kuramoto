@@ -179,6 +179,17 @@ function run!(
     end
 
     #=======================================================================================#
+    #============ Create the csv file with the the initial data ================#
+    #=======================================================================================#
+
+
+    next_sim_id = initialize_csv_log(output_csv)
+    # Append the results to the CSV file
+    append_simulation_result(output_csv, next_sim_id, κ, Lx, Ly, Δx, Δy, Δt, mean_rho, mean_omega, mean_theta, range_rho, range_omega, range_theta, date)
+
+
+    
+    #=======================================================================================#
     #============ The big loop =============================================================#
     #=======================================================================================#
 
@@ -187,11 +198,21 @@ function run!(
     flux_u = zeros(ncellx + 1, ncelly + 1)
     flux_v = zeros(ncellx + 1, ncelly + 1)
 
+    xcm_log = Float64[]
+    ycm_log = Float64[]
+    time_log = Float64[]
+
+
+
     println("Run the simulation...\n")
     ntime = floor(Int, final_time / Δt)
     p = Progress(ntime)
     for itime in 1:ntime
         scheme_iter!(ρ,w,u,v,Δx,Δy,Δt,c1,c2,λ,bcond_x,bcond_y,Fx,Fy,flux_ρ,flux_w,flux_u,flux_v,method)
+        xcm, ycm = center_of_mass(ρ, Δx, Δy)
+        push!(xcm_log, xcm)
+        push!(ycm_log, ycm)
+        push!(time_log, itime * Δt)
         if should_save
             if itime%save_step == 0
                 save_data!(data,ρ,w,u,v,data_dir,"data_$itime.jld2",key="iter_$itime")
@@ -213,6 +234,9 @@ function run!(
         next!(p)
     end
 
+
+
+
     #=======================================================================================#
     #============ Collect the simulation time and save the final data ======================#
     #=======================================================================================#
@@ -222,6 +246,28 @@ function run!(
     if !should_save
         save_data!(data,ρ,w,u,v,data_dir,"data_$ntime.jld2",key="iter_$ntime")
     end
+
+
+    fig_cm = Figure(resolution=(1000, 500))
+    axx = Axis(fig_cm[1, 1], xlabel="time", ylabel="x_cm", title="Center of Mass: x(t)")
+    lines!(axx, time_log, xcm_log)
+    axy = Axis(fig_cm[1, 2], xlabel="time", ylabel="y_cm", title="Center of Mass: y(t)")
+    lines!(axy, time_log, ycm_log)
+
+    t_com = 5.0
+    mask = time_log .>= t_com
+    t_signal = time_log[mask]
+    signal   = xcm_log[mask]
+
+    locs, peaks = findmaxima(signal)   
+    t_peaks = t_signal[locs]           
+    periods = diff(t_peaks)
+    T_est = mean(periods)
+    println("Estimated period after t=$t_com: ", T_est)
+
+    cm_path = joinpath(dir_name, "center_of_mass_evolution.png")
+    save(cm_path, fig_cm)
+    println("Saved CoM plot to: ", cm_path)
 
     if should_plot || save_video
         if save_video
@@ -234,4 +280,7 @@ function run!(
     end
 
 
+
 end
+
+
