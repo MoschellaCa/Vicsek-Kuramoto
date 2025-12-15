@@ -75,3 +75,26 @@ function coefficients_Vicsek(κ;model="Fokker-Planck")
         ArgumentError("Model not defined!")
     end
 end
+
+
+"""
+    center_of_mass(ρ, Δx, Δy)
+
+Compute the center of mass (x_cm, y_cm) of the system using the formula:
+
+x_cm = ∫ ρ(x,y) x dx dy / ∫ ρ(x,y) dx dy,
+y_cm = ∫ ρ(x,y) y dx dy / ∫ ρ(x,y) dx dy.
+
+"""
+function center_of_mass(ρ, Δx, Δy)
+    ncellx = size(ρ,1) - 2
+    ncelly = size(ρ,2) - 2
+    x = (Δx/2):Δx:(ncellx*Δx - Δx/2)
+    y = (Δy/2):Δy:(ncelly*Δy - Δy/2)
+    ρint = ρ[2:end-1, 2:end-1]
+    mass = sum(ρint) * Δx * Δy
+    xcm = sum(ρint .* x) * Δy / mass
+    ycm = sum(ρint' .* y) * Δx / mass
+    return xcm, ycm
+end
+

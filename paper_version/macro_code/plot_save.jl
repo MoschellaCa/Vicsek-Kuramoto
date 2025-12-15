@@ -121,6 +121,10 @@ end
 
 
 
+
+
+
+
 """
     update_plot!(fig,ax,hm,arrows,ρ,w,u,v,title,dir_name,file_name,save_plot=true,stream=nothing)
 
@@ -169,6 +173,7 @@ function update_plot_theta!(fig,ax,hm2,ρ,w,u,v,title,dir_name,file_name,save_pl
         recordframe!(stream)
     end
 end
+
 
 
 
