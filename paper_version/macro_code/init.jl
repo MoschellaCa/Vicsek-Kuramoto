@@ -24,10 +24,10 @@ function random_init(
     θ = mean_θ .+ range_θ .* (rand(ncellx+2,ncelly+2) .- 0.5)
     
     # Create random mask to flip 1/3 of the entries
-    flip_mask = rand(ncellx+2, ncelly+2) .< (1/4)
+    #flip_mask = rand(ncellx+2, ncelly+2) .< (1/4)
 
     # Flip the sign of w wherever the mask is true
-    w[flip_mask] .*= -1
+    #w[flip_mask] .*= -1
     u = cos.(θ)
     v = sin.(θ)
     boundary_conditions_ρwuv!(ρ,w,u,v,bcond_x,bcond_y)
