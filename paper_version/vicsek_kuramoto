@@ -1,7 +1,3 @@
-#Comment 1.06.2025 This is the right version of the code to use.
-#I will create a parallel version to visualize the angular velocity instead of the direction 
-
-
 using LinearAlgebra, Plots, ProgressMeter, Profile, ProfileView, Optim, CSV, DataFrames, Dates
 using DifferentialEquations, Plots, UnPack, Distributions, StaticArrays, CellListMap
 import CellListMap.wrap_relative_to
